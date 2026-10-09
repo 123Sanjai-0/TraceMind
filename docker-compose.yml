@@ -1,0 +1,103 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tracemind-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://tracemind:tracemind_secure_pwd@postgres:5432/tracemind
+      - LLM_PROVIDER=mock
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - tracemind-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tracemind-frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    networks:
+      - tracemind-net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: tracemind-postgres
+    environment:
+      POSTGRES_USER: tracemind
+      POSTGRES_PASSWORD: tracemind_secure_pwd
+      POSTGRES_DB: tracemind
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tracemind -d tracemind"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tracemind-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: tracemind-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - tracemind-net
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    container_name: tracemind-otel-collector
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otel-collector.yaml
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+      - "8889:8889" # Prometheus metrics exporter
+    networks:
+      - tracemind-net
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: tracemind-prometheus
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - tracemind-net
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: tracemind-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - tracemind-net
+
+volumes:
+  postgres_data:
+
+networks:
+  tracemind-net:
+    driver: bridge
